@@ -16,7 +16,8 @@ The original working binary was built from upstream commit
 ## Restore After Reinstalling Omarchy
 
 ```bash
-git clone https://github.com/BenDManning/omarchy-touchscreen-backup.git
+gh auth login
+gh repo clone BenDManning/omarchy-touchscreen-backup
 cd omarchy-touchscreen-backup
 ./install.sh
 ```
