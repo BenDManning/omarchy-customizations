@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "local.solar-nightlight",
+  "name": "Solar Night Light",
+  "version": "1.0.0",
+  "author": "Ben Manning",
+  "description": "Persistent night-light master switch with a solar schedule",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "BarWidget.qml"},
+  "barWidget": {
+    "displayName": "Solar night light",
+    "description": "Left-click toggles; right-click opens schedule settings",
+    "category": "Status",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}

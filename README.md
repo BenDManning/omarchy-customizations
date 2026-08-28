@@ -27,8 +27,11 @@ Hyprland Lua override that Omarchy updates will not overwrite.
 - Recalculates sunrise and sunset daily.
 - Fades between 4000K and 6500K over 30 minutes centered on each solar event.
 - Preserves the stock Omarchy hotbar toggle. A manual override lasts until the
-  next sunrise or sunset; toggling back to the scheduled value resumes automation.
+  user changes it again. Off stays off indefinitely; on follows the selected schedule.
 - Runs as an enabled systemd user service and follows timezone changes.
+- Replaces only the stock Night Light indicator with a user-owned widget. Left-click
+  is the persistent master switch; right-click opens settings for automatic or
+  custom scheduling, fade duration, warmth, and automatic or manual location.
 
 Set the host timezone normally with `timedatectl set-timezone Region/City`.
 

@@ -3,15 +3,20 @@
 
 import math
 import os
+import argparse
+import json
 import subprocess
 import time
 import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-DAY_TEMPERATURE = 6500
-NIGHT_TEMPERATURE = 4000
-FADE_MINUTES = 30
+DEFAULT_CONFIG = {"enabled": True, "day_temperature": 6500,
+                  "night_temperature": 4000, "fade_minutes": 30,
+                  "schedule_mode": "solar", "start_minutes": 20 * 60,
+                  "end_minutes": 7 * 60, "location_mode": "timezone",
+                  "latitude": None, "longitude": None}
+CONFIG_PATH = os.path.expanduser("~/.config/omarchy/solar-nightlight.json")
 UPDATE_SECONDS = 30
 ZONE_TABLES = ("/usr/share/zoneinfo/zone1970.tab", "/usr/share/zoneinfo/zone.tab")
 
@@ -34,8 +39,10 @@ def compact_coordinate(value, degree_digits):
     return sign * (degrees + minutes / 60 + seconds / 3600)
 
 
-def system_location():
+def system_location(config=None):
     timezone_name = system_timezone_name()
+    if config and config["location_mode"] == "manual":
+        return ZoneInfo(timezone_name), float(config["latitude"]), float(config["longitude"])
     for table in ZONE_TABLES:
         try:
             rows = open(table, encoding="utf-8")
@@ -98,21 +105,53 @@ def solar_event(day, sunrise, tz, latitude, longitude):
     return event
 
 
-def target_temperature(now, latitude, longitude):
-    sunrise = solar_event(now.date(), True, now.tzinfo, latitude, longitude)
-    sunset = solar_event(now.date(), False, now.tzinfo, latitude, longitude)
-    half_fade = timedelta(minutes=FADE_MINUTES / 2)
+def load_config():
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as config_file:
+            loaded = json.load(config_file)
+    except (OSError, ValueError):
+        loaded = {}
+    config = DEFAULT_CONFIG.copy()
+    config.update({key: loaded[key] for key in config if key in loaded})
+    return config
+
+
+def save_config(config):
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    temporary = CONFIG_PATH + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as config_file:
+        json.dump(config, config_file, indent=2)
+        config_file.write("\n")
+    os.replace(temporary, CONFIG_PATH)
+
+
+def clock_event(now, minutes):
+    return now.replace(hour=int(minutes) // 60, minute=int(minutes) % 60,
+                       second=0, microsecond=0)
+
+
+def target_temperature(now, latitude, longitude, config):
+    if config["schedule_mode"] == "solar":
+        sunrise = solar_event(now.date(), True, now.tzinfo, latitude, longitude)
+        sunset = solar_event(now.date(), False, now.tzinfo, latitude, longitude)
+    else:
+        sunrise = clock_event(now, config["end_minutes"])
+        sunset = clock_event(now, config["start_minutes"])
+    fade_minutes = max(1, int(config["fade_minutes"]))
+    night_temperature = int(config["night_temperature"])
+    day_temperature = int(config["day_temperature"])
+    half_fade = timedelta(minutes=fade_minutes / 2)
 
     if sunrise - half_fade <= now <= sunrise + half_fade:
-        progress = (now - (sunrise - half_fade)) / timedelta(minutes=FADE_MINUTES)
-        value = NIGHT_TEMPERATURE + progress * (DAY_TEMPERATURE - NIGHT_TEMPERATURE)
+        progress = (now - (sunrise - half_fade)) / timedelta(minutes=fade_minutes)
+        value = night_temperature + progress * (day_temperature - night_temperature)
     elif sunset - half_fade <= now <= sunset + half_fade:
-        progress = (now - (sunset - half_fade)) / timedelta(minutes=FADE_MINUTES)
-        value = DAY_TEMPERATURE - progress * (DAY_TEMPERATURE - NIGHT_TEMPERATURE)
+        progress = (now - (sunset - half_fade)) / timedelta(minutes=fade_minutes)
+        value = day_temperature - progress * (day_temperature - night_temperature)
     elif sunrise + half_fade < now < sunset - half_fade:
-        value = DAY_TEMPERATURE
+        value = day_temperature
     else:
-        value = NIGHT_TEMPERATURE
+        value = night_temperature
     return round(value), sunrise, sunset
 
 
@@ -137,51 +176,31 @@ def current_temperature():
     return int(match.group()) if match else None
 
 
-def next_solar_event(now, sunrise, sunset, latitude, longitude):
-    if now < sunrise:
-        return sunrise
-    if now < sunset:
-        return sunset
-    return solar_event(now.date() + timedelta(days=1), True, now.tzinfo, latitude, longitude)
+def status(config=None):
+    config = config or load_config()
+    tz, latitude, longitude = system_location(config)
+    now = datetime.now(tz)
+    scheduled, sunrise, sunset = target_temperature(now, latitude, longitude, config)
+    return {**config, "timezone": str(tz), "latitude": latitude, "longitude": longitude,
+            "sunrise": sunrise.strftime("%H:%M"), "sunset": sunset.strftime("%H:%M"),
+            "scheduled_temperature": scheduled, "temperature": current_temperature()}
 
 
-def main():
+def daemon():
     last_value = None
     last_day = None
-    manual_until = None
     last_location = None
     while True:
-        tz, latitude, longitude = system_location()
+        config = load_config()
+        tz, latitude, longitude = system_location(config)
         now = datetime.now(tz)
-        value, sunrise, sunset = target_temperature(now, latitude, longitude)
+        scheduled, sunrise, sunset = target_temperature(now, latitude, longitude, config)
+        value = scheduled if config["enabled"] else int(config["day_temperature"])
         location = (str(tz), latitude, longitude)
         if location != last_location:
             print(f"timezone={tz} latitude={latitude:.4f} longitude={longitude:.4f}", flush=True)
-            manual_until = None
             last_location = location
-
-        # The stock Omarchy hotbar toggle writes 4000K/6500K over IPC. Treat
-        # any external temperature change as a manual override until the next
-        # solar event. Toggling back to the scheduled value resumes immediately.
-        actual = current_temperature()
-        if last_value is not None and actual is not None and actual != last_value:
-            manual_until = None if actual == value else next_solar_event(
-                now, sunrise, sunset, latitude, longitude
-            )
-            last_value = actual
-            if manual_until:
-                print(
-                    f"{now.isoformat(timespec='seconds')} manual={actual}K "
-                    f"automatic-resume={manual_until.isoformat(timespec='minutes')}",
-                    flush=True,
-                )
-
-        if manual_until and now < manual_until:
-            time.sleep(UPDATE_SECONDS)
-            continue
-        manual_until = None
-
-        if value != last_value or now.date() != last_day:
+        if value != last_value or now.date() != last_day or current_temperature() != value:
             if apply_temperature(value):
                 last_value = value
                 last_day = now.date()
@@ -191,6 +210,59 @@ def main():
                     flush=True,
                 )
         time.sleep(UPDATE_SECONDS)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--enable", action="store_true")
+    group.add_argument("--disable", action="store_true")
+    group.add_argument("--toggle", action="store_true")
+    parser.add_argument("--night-temperature", type=int)
+    parser.add_argument("--fade-minutes", type=int)
+    parser.add_argument("--schedule-mode", choices=("solar", "custom"))
+    parser.add_argument("--start-minutes", type=int)
+    parser.add_argument("--end-minutes", type=int)
+    parser.add_argument("--location-mode", choices=("timezone", "manual"))
+    parser.add_argument("--latitude", type=float)
+    parser.add_argument("--longitude", type=float)
+    parser.add_argument("--status", action="store_true")
+    args = parser.parse_args()
+    if not any(vars(args).values()):
+        daemon()
+        return
+    config = load_config()
+    if args.enable:
+        config["enabled"] = True
+    elif args.disable:
+        config["enabled"] = False
+    elif args.toggle:
+        config["enabled"] = not config["enabled"]
+    if args.night_temperature is not None:
+        config["night_temperature"] = max(2500, min(5500, args.night_temperature))
+    if args.fade_minutes is not None:
+        config["fade_minutes"] = max(1, min(120, args.fade_minutes))
+    if args.schedule_mode:
+        config["schedule_mode"] = args.schedule_mode
+    if args.start_minutes is not None:
+        config["start_minutes"] = args.start_minutes % 1440
+    if args.end_minutes is not None:
+        config["end_minutes"] = args.end_minutes % 1440
+    if args.location_mode:
+        config["location_mode"] = args.location_mode
+    if args.latitude is not None:
+        config["latitude"] = max(-90, min(90, args.latitude))
+    if args.longitude is not None:
+        config["longitude"] = max(-180, min(180, args.longitude))
+    if config["location_mode"] == "manual" and (config["latitude"] is None or config["longitude"] is None):
+        parser.error("manual location requires latitude and longitude")
+    save_config(config)
+    state = status(config)
+    apply_temperature(state["scheduled_temperature"] if config["enabled"] else config["day_temperature"])
+    if args.status:
+        print(json.dumps(state))
+    else:
+        print(json.dumps(config))
 
 
 if __name__ == "__main__":
