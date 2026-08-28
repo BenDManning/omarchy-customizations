@@ -37,3 +37,5 @@ if [[ -n "$config_errors" ]]; then
 fi
 
 printf 'Touchscreen screenshot support installed successfully.\n'
+
+"$repo_dir/nightlight/install.sh"

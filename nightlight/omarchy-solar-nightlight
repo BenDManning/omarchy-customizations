@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Drive hyprsunset from local solar times with smooth dawn/dusk fades."""
+
+import math
+import os
+import subprocess
+import time
+import re
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+DAY_TEMPERATURE = 6500
+NIGHT_TEMPERATURE = 4000
+FADE_MINUTES = 30
+UPDATE_SECONDS = 30
+ZONE_TABLES = ("/usr/share/zoneinfo/zone1970.tab", "/usr/share/zoneinfo/zone.tab")
+
+
+def system_timezone_name():
+    target = os.path.realpath("/etc/localtime")
+    marker = "/zoneinfo/"
+    if marker in target:
+        return target.split(marker, 1)[1]
+    with open("/etc/timezone", encoding="utf-8") as timezone_file:
+        return timezone_file.read().strip()
+
+
+def compact_coordinate(value, degree_digits):
+    sign = -1 if value[0] == "-" else 1
+    digits = value[1:]
+    degrees = int(digits[:degree_digits])
+    minutes = int(digits[degree_digits:degree_digits + 2])
+    seconds = int(digits[degree_digits + 2:] or 0)
+    return sign * (degrees + minutes / 60 + seconds / 3600)
+
+
+def system_location():
+    timezone_name = system_timezone_name()
+    for table in ZONE_TABLES:
+        try:
+            rows = open(table, encoding="utf-8")
+        except OSError:
+            continue
+        with rows:
+            for row in rows:
+                fields = row.rstrip("\n").split("\t")
+                if row.startswith("#") or len(fields) < 3 or fields[2] != timezone_name:
+                    continue
+                match = re.fullmatch(r"([+-]\d{4}(?:\d{2})?)([+-]\d{5}(?:\d{2})?)", fields[1])
+                if match:
+                    return (ZoneInfo(timezone_name), compact_coordinate(match.group(1), 2),
+                            compact_coordinate(match.group(2), 3))
+    raise RuntimeError(f"No location found for system timezone {timezone_name!r}")
+
+
+def solar_event(day, sunrise, tz, latitude, longitude):
+    """NOAA sunrise/sunset approximation, returned in the active timezone."""
+    zenith = 90.833
+    n = day.timetuple().tm_yday
+    lng_hour = longitude / 15.0
+    approximate = n + ((6 if sunrise else 18) - lng_hour) / 24.0
+    mean_anomaly = (0.9856 * approximate) - 3.289
+    true_longitude = (
+        mean_anomaly
+        + 1.916 * math.sin(math.radians(mean_anomaly))
+        + 0.020 * math.sin(math.radians(2 * mean_anomaly))
+        + 282.634
+    ) % 360
+    right_ascension = math.degrees(
+        math.atan(0.91764 * math.tan(math.radians(true_longitude)))
+    ) % 360
+    right_ascension += (
+        math.floor(true_longitude / 90) * 90
+        - math.floor(right_ascension / 90) * 90
+    )
+    right_ascension /= 15
+    declination_sin = 0.39782 * math.sin(math.radians(true_longitude))
+    declination_cos = math.cos(math.asin(declination_sin))
+    hour_cos = (
+        math.cos(math.radians(zenith))
+        - declination_sin * math.sin(math.radians(latitude))
+    ) / (declination_cos * math.cos(math.radians(latitude)))
+    if not -1 <= hour_cos <= 1:
+        raise RuntimeError("No sunrise/sunset at the configured latitude today")
+    hour_angle = 360 - math.degrees(math.acos(hour_cos)) if sunrise else math.degrees(math.acos(hour_cos))
+    hour_angle /= 15
+    local_mean_time = (
+        hour_angle + right_ascension - 0.06571 * approximate - 6.622
+    )
+    utc_hours = (local_mean_time - lng_hour) % 24
+    utc_midnight = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    event = (utc_midnight + timedelta(hours=utc_hours)).astimezone(tz)
+    # The modulo-24 UTC result can land on the adjacent local calendar day.
+    if event.date() < day:
+        event += timedelta(days=1)
+    elif event.date() > day:
+        event -= timedelta(days=1)
+    return event
+
+
+def target_temperature(now, latitude, longitude):
+    sunrise = solar_event(now.date(), True, now.tzinfo, latitude, longitude)
+    sunset = solar_event(now.date(), False, now.tzinfo, latitude, longitude)
+    half_fade = timedelta(minutes=FADE_MINUTES / 2)
+
+    if sunrise - half_fade <= now <= sunrise + half_fade:
+        progress = (now - (sunrise - half_fade)) / timedelta(minutes=FADE_MINUTES)
+        value = NIGHT_TEMPERATURE + progress * (DAY_TEMPERATURE - NIGHT_TEMPERATURE)
+    elif sunset - half_fade <= now <= sunset + half_fade:
+        progress = (now - (sunset - half_fade)) / timedelta(minutes=FADE_MINUTES)
+        value = DAY_TEMPERATURE - progress * (DAY_TEMPERATURE - NIGHT_TEMPERATURE)
+    elif sunrise + half_fade < now < sunset - half_fade:
+        value = DAY_TEMPERATURE
+    else:
+        value = NIGHT_TEMPERATURE
+    return round(value), sunrise, sunset
+
+
+def apply_temperature(value):
+    result = subprocess.run(
+        ["hyprctl", "hyprsunset", "temperature", str(value)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def current_temperature():
+    result = subprocess.run(
+        ["hyprctl", "hyprsunset", "temperature"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    match = re.search(r"\d+", result.stdout) if result.returncode == 0 else None
+    return int(match.group()) if match else None
+
+
+def next_solar_event(now, sunrise, sunset, latitude, longitude):
+    if now < sunrise:
+        return sunrise
+    if now < sunset:
+        return sunset
+    return solar_event(now.date() + timedelta(days=1), True, now.tzinfo, latitude, longitude)
+
+
+def main():
+    last_value = None
+    last_day = None
+    manual_until = None
+    last_location = None
+    while True:
+        tz, latitude, longitude = system_location()
+        now = datetime.now(tz)
+        value, sunrise, sunset = target_temperature(now, latitude, longitude)
+        location = (str(tz), latitude, longitude)
+        if location != last_location:
+            print(f"timezone={tz} latitude={latitude:.4f} longitude={longitude:.4f}", flush=True)
+            manual_until = None
+            last_location = location
+
+        # The stock Omarchy hotbar toggle writes 4000K/6500K over IPC. Treat
+        # any external temperature change as a manual override until the next
+        # solar event. Toggling back to the scheduled value resumes immediately.
+        actual = current_temperature()
+        if last_value is not None and actual is not None and actual != last_value:
+            manual_until = None if actual == value else next_solar_event(
+                now, sunrise, sunset, latitude, longitude
+            )
+            last_value = actual
+            if manual_until:
+                print(
+                    f"{now.isoformat(timespec='seconds')} manual={actual}K "
+                    f"automatic-resume={manual_until.isoformat(timespec='minutes')}",
+                    flush=True,
+                )
+
+        if manual_until and now < manual_until:
+            time.sleep(UPDATE_SECONDS)
+            continue
+        manual_until = None
+
+        if value != last_value or now.date() != last_day:
+            if apply_temperature(value):
+                last_value = value
+                last_day = now.date()
+                print(
+                    f"{now.isoformat(timespec='seconds')} {value}K "
+                    f"sunrise={sunrise:%H:%M} sunset={sunset:%H:%M}",
+                    flush=True,
+                )
+        time.sleep(UPDATE_SECONDS)
+
+
+if __name__ == "__main__":
+    main()

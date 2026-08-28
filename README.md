@@ -1,54 +1,54 @@
-# Omarchy Touchscreen Screenshot Fix
+# Omarchy Customizations
 
-Private backup of the touchscreen work used on Omarchy with Hyprland.
+Personal Omarchy improvements packaged for reproducible installation after a fresh setup.
 
-The stock `slurp` 1.5.0 lets an idle mouse selection block touchscreen input.
-This patch hands selection control to the touchscreen, allowing:
-
-- A tap to select the smallest window under the finger.
-- A drag to create a freeform screenshot region.
-- The mouse cursor's idle window highlight to stop blocking touch input.
-
-The original working binary was built from upstream commit
-`fc921b603ee02afff42aba9eb073e82fab900048` (tag `v1.5.0`). Its SHA-256 was
-`ab10015c1e9c471ab7353e933edae7cf80805436fc6f9871be77f3df4454316a`.
-
-## Restore After Reinstalling Omarchy
+## Install
 
 ```bash
 gh auth login
-gh repo clone BenDManning/omarchy-touchscreen-backup
-cd omarchy-touchscreen-backup
+gh repo clone BenDManning/omarchy-customizations
+cd omarchy-customizations
 ./install.sh
 ```
 
-The installer:
+The top-level installer installs both features. Each feature also has its own installer.
 
-1. Installs the required Arch packages through `omarchy pkg add`.
-2. Clones upstream `slurp` v1.5.0 and applies `patches/slurp-1.5.0-touchscreen.patch`.
-3. Builds the patched binary into `~/.local/lib/omarchy-touchscreen/slurp`.
-4. Installs `~/.config/hypr/touchscreen-screenshot.lua`.
-5. Adds one `require` line to `~/.config/hypr/hyprland.lua` if needed.
-6. Reloads and validates the Hyprland configuration.
+## Touchscreen Screenshots
 
-The override is isolated from `/usr/share/omarchy`, so an Omarchy update will
-not overwrite it. Re-run the installer if the local binary is removed.
+Patches `slurp` 1.5.0 so a touchscreen tap selects the smallest window under the
+finger, a drag selects a freeform region, and an idle mouse highlight does not
+block touch input. The installer builds the patched binary and adds an isolated
+Hyprland Lua override that Omarchy updates will not overwrite.
 
-## Files
+## Solar Night Light
 
-- `patches/slurp-1.5.0-touchscreen.patch`: exact source change recovered from the original build session.
-- `hypr/touchscreen-screenshot.lua`: Print Screen binding that puts the patched `slurp` first in `PATH` for Omarchy's screenshot command.
-- `install.sh`: reproducible build and Omarchy configuration installer.
+- Gets representative coordinates from the active IANA system timezone through
+  the local `tzdata` tables; there is no fixed city or network lookup.
+- Recalculates sunrise and sunset daily.
+- Fades between 4000K and 6500K over 30 minutes centered on each solar event.
+- Preserves the stock Omarchy hotbar toggle. A manual override lasts until the
+  next sunrise or sunset; toggling back to the scheduled value resumes automation.
+- Runs as an enabled systemd user service and follows timezone changes.
+
+Set the host timezone normally with `timedatectl set-timezone Region/City`.
 
 ## Remove
+
+Touchscreen files:
 
 ```bash
 rm -f ~/.local/lib/omarchy-touchscreen/slurp
 rm -f ~/.config/hypr/touchscreen-screenshot.lua
 ```
 
-Then remove this line from `~/.config/hypr/hyprland.lua`:
+Then remove `require("hypr.touchscreen-screenshot")` from
+`~/.config/hypr/hyprland.lua`.
 
-```lua
-require("hypr.touchscreen-screenshot")
+Solar night-light files:
+
+```bash
+systemctl --user disable --now omarchy-solar-nightlight.service
+rm -f ~/.local/bin/omarchy-solar-nightlight
+rm -f ~/.config/systemd/user/omarchy-solar-nightlight.service
+systemctl --user daemon-reload
 ```

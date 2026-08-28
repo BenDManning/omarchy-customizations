@@ -1,0 +1,14 @@
+[Unit]
+Description=Timezone-aware solar night light with 30-minute fades
+After=graphical-session.target hyprsunset.service
+Wants=hyprsunset.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/omarchy-solar-nightlight
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
