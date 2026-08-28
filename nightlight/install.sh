@@ -16,9 +16,8 @@ jq '
       map(if .id == "omarchy.indicators" then
         .items = ((.items // ["Dictation", "ScreenRecording", "Reminder", "NightLight", "Dnd", "StayAwake"]) - ["NightLight"])
       else . end)
-      | if any(.[]; .id == "local.solar-nightlight") then .
-        else reduce .[] as $item ([]; . + [$item] + (if $item.id == "omarchy.indicators" then [{"id":"local.solar-nightlight"}] else [] end))
-        end
+      | map(select(.id != "local.solar-nightlight"))
+      | reduce .[] as $item ([]; . + [$item] + (if $item.id == "omarchy.indicators" then [{"id":"local.solar-nightlight"}] else [] end))
     )
   )
 ' "$shell_config" > "$shell_config.tmp"

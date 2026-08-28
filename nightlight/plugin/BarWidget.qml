@@ -21,6 +21,9 @@ BarWidget {
   property string sunrise: "--:--"
   property string sunset: "--:--"
   property bool popupOpen: false
+  readonly property bool effectActive: enabled && temperature < 6000
+  readonly property bool revealInactive: effectActive || popupOpen ||
+    (bar && bar.centerSectionRevealHeld === true && bar.centerHoverRevealSuppressed !== true)
 
   function refresh() { if (!statusProcess.running) statusProcess.running = true }
   function run(args) {
@@ -34,14 +37,19 @@ BarWidget {
     return String(hour).padStart(2, "0") + ":" + String(minute).padStart(2, "0")
   }
 
-  implicitWidth: button.implicitWidth
+  implicitWidth: revealInactive ? button.implicitWidth : 0
   implicitHeight: barSize
+  opacity: effectActive ? 1.0 : (revealInactive ? 0.45 : 0.0)
+  clip: true
+  Behavior on implicitWidth { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+  Behavior on opacity { NumberAnimation { duration: 120 } }
 
   BarIconButton {
     id: button
     anchors.centerIn: parent
     bar: root.bar
-    active: root.enabled
+    active: root.effectActive
+    visible: root.revealInactive
     text: "󰔎"
     dimmed: !root.enabled
     tooltipText: root.enabled
