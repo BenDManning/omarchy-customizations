@@ -92,4 +92,4 @@ Omarchy, Hyprland, hyprsunset, Quickshell, and the other projects this repositor
 
 ## License
 
-Original code in this repository is available under the MIT License. See [LICENSE](LICENSE). Third-party code and projects retain their own licenses.
+Code specific to this repository is available under the MIT License. See [LICENSE](LICENSE). Third-party code and projects retain their own licenses.
