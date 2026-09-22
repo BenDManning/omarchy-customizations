@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This repository contains original customization code and a small patch intended
+This repository contains Omarchy customization code and a small patch intended
 to be applied to third-party software.
 
 ## slurp
