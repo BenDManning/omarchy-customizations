@@ -1,0 +1,28 @@
+From 9c1fa4e6bd030419f3b0dc5d60d47bd69012cbeb Mon Sep 17 00:00:00 2001
+From: BenDManning <140443862+BenDManning@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 08:41:43 +0330
+Subject: [PATCH 2/2] Allow touch selection while the pointer hovers over a
+ choice box
+
+A pointer selection can be a passive choice-box highlight as well as an active drag. Use the pressed-button state to preserve pointer drags, and clear and invalidate an idle highlight when accepting the first touch point. This lets touch drags and single-point selections start without moving the mouse away from supplied choice boxes.
+
+diff --git a/main.c b/main.c
+index 5d556cd..2f1dad9 100644
+--- a/main.c
++++ b/main.c
+@@ -376,10 +376,14 @@ static void touch_handle_down(void *data, struct wl_touch *touch,
+ 		struct wl_surface *surface, int32_t id,
+ 		wl_fixed_t x, wl_fixed_t y) {
+ 	struct slurp_seat *seat = data;
+-	if (seat->pointer_selection.has_selection) {
++	if (seat->button_state == WL_POINTER_BUTTON_STATE_PRESSED) {
+ 		return;
+ 	}
+ 	if (seat->touch_id == TOUCH_ID_EMPTY) {
++		if (seat->pointer_selection.has_selection) {
++			seat_set_outputs_dirty(seat);
++			seat->pointer_selection.has_selection = false;
++		}
+ 		seat->touch_id = id;
+ 		seat->touch_selection.current_output =
+ 			output_from_surface(seat->state, surface);

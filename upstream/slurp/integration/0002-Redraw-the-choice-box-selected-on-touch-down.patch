@@ -1,0 +1,18 @@
+From b9e286ec1daff4f16ca4f9afb4a64163acfa4fa1 Mon Sep 17 00:00:00 2001
+From: BenDManning <140443862+BenDManning@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 08:44:52 +0330
+Subject: [PATCH 2/2] Redraw the choice box selected on touch down
+
+
+diff --git a/main.c b/main.c
+index 83bb96a..aaab51e 100644
+--- a/main.c
++++ b/main.c
+@@ -391,6 +391,7 @@ static void touch_handle_down(void *data, struct wl_touch *touch,
+ 		move_seat(seat, x, y, &seat->touch_selection);
+ 		seat_update_selection(seat, &seat->touch_selection);
+ 		handle_selection_start(seat, &seat->touch_selection);
++		seat_set_outputs_dirty(seat);
+ 	}
+ }
+ 

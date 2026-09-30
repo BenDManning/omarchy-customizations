@@ -1,0 +1,21 @@
+From 708d7f0d03a37359b0d5344d3c97c07495aecc7f Mon Sep 17 00:00:00 2001
+From: BenDManning <140443862+BenDManning@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 08:41:42 +0330
+Subject: [PATCH 1/2] Ignore release events from untracked touch points
+
+A touch down can be ignored when another touch is already tracked or a pointer selection is active. Only finish a touch selection when the released ID is the one accepted by touch_handle_down, matching the motion handler.
+
+diff --git a/main.c b/main.c
+index 791e5c3..5d556cd 100644
+--- a/main.c
++++ b/main.c
+@@ -396,6 +396,9 @@ static void touch_clear_state(struct slurp_seat *seat) {
+ static void touch_handle_up(void *data, struct wl_touch *touch, uint32_t serial,
+ 		uint32_t time, int32_t id) {
+ 	struct slurp_seat *seat = data;
++	if (seat->touch_id != id) {
++		return;
++	}
+ 	handle_selection_end(seat, &seat->touch_selection);
+ 	touch_clear_state(seat);
+ }
